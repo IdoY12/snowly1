@@ -78,6 +78,7 @@ class FingerCounter:
         self.total_gestures = 0
         self.current_finger_count = None
         self.last_announcement_time = 0
+        self.last_announced_count = None  # Track last announced count to prevent repetition
         self.announcement_cooldown = 1.5  # seconds between announcements
         
         # Threading for TTS (non-blocking)
@@ -89,11 +90,25 @@ class FingerCounter:
         try:
             voices = self.tts_engine.getProperty('voices')
             if voices:
-                # Try to set a more natural voice (usually index 1 is better on macOS/Windows)
-                if len(voices) > 1:
-                    self.tts_engine.setProperty('voice', voices[1].id)
-                else:
-                    self.tts_engine.setProperty('voice', voices[0].id)
+                # Find and set an English voice (prefer US or UK English)
+                english_voice = None
+                for voice in voices:
+                    # Check if voice name or ID contains English indicators
+                    voice_info = f"{voice.name} {voice.id}".lower()
+                    if any(lang in voice_info for lang in ['en', 'english', 'us', 'uk', 'american', 'british']):
+                        english_voice = voice.id
+                        break
+                
+                # If no explicit English voice found, try common indices
+                if english_voice is None:
+                    # On macOS, index 0 is usually English, index 1 might be different language
+                    if len(voices) > 0:
+                        english_voice = voices[0].id
+                    else:
+                        english_voice = voices[0].id if voices else None
+                
+                if english_voice:
+                    self.tts_engine.setProperty('voice', english_voice)
             
             # Set speech rate and volume
             self.tts_engine.setProperty('rate', 150)  # Speed of speech
@@ -120,14 +135,18 @@ class FingerCounter:
         pip = landmarks[finger_pip]
         mcp = landmarks[finger_mcp]
         
-        # For thumb, use different logic (x-coordinate comparison)
+        # For thumb, use x-coordinate comparison with MCP (more accurate)
         if finger_tip == self.THUMB_TIP:
             if is_right_hand:
-                return tip.x > pip.x
+                # For right hand, thumb is up if tip.x > mcp.x
+                return tip.x > mcp.x
             else:
-                return tip.x < pip.x
+                # For left hand, thumb is up if tip.x < mcp.x
+                return tip.x < mcp.x
         else:
             # For other fingers, compare y-coordinates
+            # In MediaPipe, y=0 is top, so tip.y < pip.y means finger is up
+            # Use PIP as reference point for better accuracy
             return tip.y < pip.y
     
     def count_fingers(self, landmarks: List, handedness: str) -> int:
@@ -219,24 +238,26 @@ class FingerCounter:
         """
         current_time = time.time()
         
-        # Debouncing: only announce if enough time has passed
+        # Debouncing: only announce if count changed AND enough time has passed
+        if self.last_announced_count == count:
+            return  # Don't announce same count again
+        
         if current_time - self.last_announcement_time < self.announcement_cooldown:
-            return
+            return  # Don't announce too frequently
         
-        # Prepare announcement text
+        # Prepare announcement text with correct grammar
         if count == 0:
-            text = "You are holding up zero fingers"
+            text = "0 fingers"
         elif count == 1:
-            text = "You are holding up 1 finger"
+            text = "1 finger"
         else:
-            text = f"You are holding up {count} fingers"
+            text = f"{count} fingers"
         
-        if gesture and gesture not in [f"{count} Fingers"]:
-            text += f", {gesture}"
-        
+        # Don't add gesture info to keep announcements simple and clear
         # Announce in a separate thread to avoid blocking video processing
         if not self.tts_thread or not self.tts_thread.is_alive():
             self.last_announcement_time = current_time
+            self.last_announced_count = count  # Track what we're about to announce
             self.tts_thread = threading.Thread(
                 target=self._speak, args=(text,), daemon=True
             )
@@ -384,11 +405,11 @@ class FingerCounter:
         rgb_frame.flags.writeable = True
         frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
         
-        # Track maximum finger count across all hands
-        max_finger_count = 0
+        # Track total finger count across all hands
+        total_finger_count = 0
         detected_gesture = None
-        max_hand_landmarks = None
-        max_hand_label = None
+        primary_hand_landmarks = None
+        primary_hand_label = None
         
         # Process each detected hand
         if results.multi_hand_landmarks:
@@ -409,29 +430,31 @@ class FingerCounter:
                 landmarks = hand_landmarks.landmark
                 finger_count = self.count_fingers(landmarks, hand_label)
                 
-                # Track maximum
-                if finger_count > max_finger_count:
-                    max_finger_count = finger_count
-                    max_hand_landmarks = landmarks
-                    max_hand_label = hand_label
+                # Sum finger counts from all hands
+                total_finger_count += finger_count
+                
+                # Track first hand for gesture recognition (can be enhanced later)
+                if primary_hand_landmarks is None:
+                    primary_hand_landmarks = landmarks
+                    primary_hand_label = hand_label
         
-        # Recognize gesture for the hand with maximum finger count
-        if max_hand_landmarks is not None and max_hand_label is not None:
-            detected_gesture = self.recognize_gesture(max_hand_landmarks, max_hand_label)
+        # Recognize gesture for the primary hand
+        if primary_hand_landmarks is not None and primary_hand_label is not None:
+            detected_gesture = self.recognize_gesture(primary_hand_landmarks, primary_hand_label)
         
         # Update statistics
-        if max_finger_count != self.current_finger_count:
-            self.current_finger_count = max_finger_count
+        if total_finger_count != self.current_finger_count:
+            self.current_finger_count = total_finger_count
             
             if detected_gesture:
                 self.gesture_counts[detected_gesture] += 1
                 self.total_gestures += 1
             
             # Announce change (always announce, even if no gesture detected)
-            self._announce_finger_count(max_finger_count, detected_gesture)
+            self._announce_finger_count(total_finger_count, detected_gesture)
         
         # Draw overlays
-        self._draw_finger_count_display(frame, max_finger_count)
+        self._draw_finger_count_display(frame, total_finger_count)
         
         if detected_gesture:
             self._draw_gesture_label(frame, detected_gesture)

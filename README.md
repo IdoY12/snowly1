@@ -61,28 +61,6 @@ Press `q` to quit when you're done.
 **Controls:**
 - Press `q` to quit
 
-## Installation Details
-
-### Step 1: Create Virtual Environment
-
-```bash
-python3 -m venv venv
-source venv/bin/activate  # macOS/Linux
-# OR
-venv\Scripts\activate     # Windows
-```
-
-### Step 2: Install Dependencies
-
-```bash
-pip install opencv-python mediapipe pyttsx3 numpy
-```
-
-Or use the requirements file:
-```bash
-pip install -r requirements.txt
-```
-
 ## Troubleshooting
 
 **Camera not working?** Make sure no other app is using your camera, and check camera permissions in your system settings.

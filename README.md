@@ -60,7 +60,8 @@ Press `q` to quit when you're done.
 
 **Controls:**
 - Press `q` to quit
-- 
+
+
 
 ## Troubleshooting
 
